@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState, Fragment } from 'react';
+import { parseNumberInput } from '@/lib/parseNumberInput';
 import { calcPnl } from '@/lib/positions';
 import type { Position } from '@/lib/positions';
 import { useBinancePrices } from '@/lib/binance';
@@ -46,9 +47,9 @@ function AddForm({ onAdd }: { onAdd: (data: Omit<Position, 'id' | 'openedAt' | '
 
   const submit = async () => {
     const symbol = form.symbol.toUpperCase().trim();
-    const entryPrice = parseFloat(form.entryPrice);
-    const size = parseFloat(form.size);
-    const leverage = parseFloat(form.leverage);
+    const entryPrice = parseNumberInput(form.entryPrice);
+    const size = parseNumberInput(form.size);
+    const leverage = parseNumberInput(form.leverage);
     if (!symbol) return setError('Symbol is required');
     if (isNaN(entryPrice) || entryPrice <= 0) return setError('Enter a valid entry price');
     if (isNaN(size) || size <= 0) return setError('Enter a valid size');
@@ -130,7 +131,7 @@ function CloseRow({ markPrice, onClose, onCancel }: {
           <span className="text-xs text-zinc-400">Exit price:</span>
           <input type="text" inputMode="decimal" value={exitPrice} onChange={(e) => setExitPrice(e.target.value)}
             className="w-36 bg-zinc-700 border border-zinc-600 rounded-lg px-3 py-1.5 text-sm font-mono text-zinc-100 focus:outline-none focus:border-zinc-400" />
-          <button onClick={() => { const p = parseFloat(exitPrice); if (!isNaN(p) && p > 0) onClose(p); }}
+          <button onClick={() => { const p = parseNumberInput(exitPrice); if (!isNaN(p) && p > 0) onClose(p); }}
             className="px-4 py-1.5 rounded-lg bg-zinc-100 text-zinc-900 text-sm font-semibold hover:bg-white transition-colors">
             Confirm Close
           </button>

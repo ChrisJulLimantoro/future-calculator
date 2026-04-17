@@ -40,6 +40,7 @@ export function computeTradeResults(inputs: TradeInputs): TradeResults {
 
   if (entryPrice <= 0 || stopLoss <= 0 || leverage <= 0 || stopLoss === entryPrice) return invalid;
 
+  // Stop below entry = long; stop above entry = short.
   const isLong = stopLoss < entryPrice;
   const slRatio = Math.abs(entryPrice - stopLoss) / entryPrice;
   const slDistancePct = slRatio * 100;

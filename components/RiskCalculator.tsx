@@ -2,6 +2,7 @@
 
 import { useState, useMemo, useEffect, useRef } from 'react';
 import { TradeInputs, computeTradeResults } from '@/lib/calculator';
+import { parseNumberInput } from '@/lib/parseNumberInput';
 
 const DEFAULT_INPUTS: TradeInputs = {
   entryPrice: 0,
@@ -51,7 +52,7 @@ function NumberInput({
           onChange={(e) => {
             const raw = e.target.value;
             setDisplay(raw);
-            const num = parseFloat(raw);
+            const num = parseNumberInput(raw);
             if (!isNaN(num)) onChange(num);
             else if (raw === '') onChange(0);
           }}
@@ -167,12 +168,27 @@ export default function RiskCalculator() {
           onChange={set('entryPrice')}
           placeholder="50000"
         />
-        <NumberInput
-          label="Stop Loss"
-          value={inputs.stopLoss}
-          onChange={set('stopLoss')}
-          placeholder="48000"
-        />
+        <div className="flex flex-col gap-1.5">
+          <NumberInput
+            label="Stop Loss"
+            value={inputs.stopLoss}
+            onChange={set('stopLoss')}
+            placeholder="48000 or 52000"
+          />
+          <p className="text-[11px] leading-snug text-zinc-500">
+            Below entry → long; above entry → short. Direction is inferred from entry and stop.
+          </p>
+          {inputs.entryPrice > 0 && inputs.stopLoss > 0 && inputs.stopLoss !== inputs.entryPrice && (
+            <p className="text-xs font-medium text-zinc-400">
+              {inputs.stopLoss < inputs.entryPrice ? (
+                <span className="text-emerald-400/90">Long setup</span>
+              ) : (
+                <span className="text-red-400/90">Short setup</span>
+              )}
+              <span className="text-zinc-500 font-normal"> — stop is {inputs.stopLoss < inputs.entryPrice ? 'below' : 'above'} entry</span>
+            </p>
+          )}
+        </div>
         <div className="border-t border-zinc-800" />
         <Slider
           label="Leverage"
