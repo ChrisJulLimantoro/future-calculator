@@ -8,6 +8,17 @@ import { useBinancePrices } from '@/lib/binance';
 import AuthForm from './AuthForm';
 
 interface User { userId: string; username: string }
+type OrderType = 'limit' | 'market';
+
+interface NewPositionPayload {
+  symbol: string;
+  side: 'long' | 'short';
+  entryPrice: number;
+  size: number;
+  leverage: number;
+  entryOrderType: OrderType;
+  entryFeeRate?: number;
+}
 
 async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, { ...init, credentials: 'include' });
@@ -19,9 +30,23 @@ async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 interface FormState {
-  symbol: string; side: 'long' | 'short'; entryPrice: string; size: string; leverage: string;
+  symbol: string;
+  side: 'long' | 'short';
+  entryPrice: string;
+  size: string;
+  leverage: string;
+  entryOrderType: OrderType;
+  entryFeeOverridePct: string; // user types a percent, e.g. "0.02"
 }
-const EMPTY_FORM: FormState = { symbol: '', side: 'long', entryPrice: '', size: '', leverage: '10' };
+const EMPTY_FORM: FormState = {
+  symbol: '',
+  side: 'long',
+  entryPrice: '',
+  size: '',
+  leverage: '10',
+  entryOrderType: 'limit',
+  entryFeeOverridePct: '',
+};
 
 function Field({ label, value, onChange, placeholder, inputMode }: {
   label: string; value: string; onChange: (v: string) => void;
@@ -37,13 +62,15 @@ function Field({ label, value, onChange, placeholder, inputMode }: {
   );
 }
 
-function AddForm({ onAdd }: { onAdd: (data: Omit<Position, 'id' | 'openedAt' | 'userId'>) => Promise<void> }) {
+function AddForm({ onAdd }: { onAdd: (data: NewPositionPayload) => Promise<void> }) {
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
+  const [showOverride, setShowOverride] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
-  const set = (field: keyof FormState) => (val: string) => setForm((f) => ({ ...f, [field]: val }));
+  const set = <K extends keyof FormState>(field: K) => (val: FormState[K]) =>
+    setForm((f) => ({ ...f, [field]: val }));
 
   const submit = async () => {
     const symbol = form.symbol.toUpperCase().trim();
@@ -54,10 +81,26 @@ function AddForm({ onAdd }: { onAdd: (data: Omit<Position, 'id' | 'openedAt' | '
     if (isNaN(entryPrice) || entryPrice <= 0) return setError('Enter a valid entry price');
     if (isNaN(size) || size <= 0) return setError('Enter a valid size');
     if (isNaN(leverage) || leverage < 1) return setError('Enter a valid leverage');
+
+    let entryFeeRate: number | undefined;
+    if (showOverride && form.entryFeeOverridePct.trim() !== '') {
+      const pct = parseNumberInput(form.entryFeeOverridePct);
+      if (isNaN(pct) || pct < 0 || pct > 1) return setError('Override fee % must be 0–1 (percent)');
+      entryFeeRate = pct / 100;
+    }
+
     setLoading(true);
     try {
-      await onAdd({ symbol, side: form.side, entryPrice, size, leverage });
-      setForm(EMPTY_FORM); setError(''); setOpen(false);
+      await onAdd({
+        symbol,
+        side: form.side,
+        entryPrice,
+        size,
+        leverage,
+        entryOrderType: form.entryOrderType,
+        ...(entryFeeRate !== undefined ? { entryFeeRate } : {}),
+      });
+      setForm(EMPTY_FORM); setError(''); setOpen(false); setShowOverride(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to add position');
     } finally { setLoading(false); }
@@ -93,6 +136,26 @@ function AddForm({ onAdd }: { onAdd: (data: Omit<Position, 'id' | 'openedAt' | '
           </div>
         </div>
         <div className="flex flex-col gap-1">
+          <label className="text-xs text-zinc-500 uppercase tracking-wider">Entry Order</label>
+          <div className="flex rounded-lg overflow-hidden border border-zinc-700">
+            {(['limit', 'market'] as const).map((t) => (
+              <button key={t} onClick={() => set('entryOrderType')(t)}
+                className={`flex-1 py-2 text-sm font-medium transition-colors ${form.entryOrderType === t ? 'bg-zinc-700 text-zinc-100' : 'bg-zinc-800 text-zinc-500 hover:text-zinc-300'}`}>
+                {t === 'limit' ? 'Limit' : 'Market'}
+              </button>
+            ))}
+          </div>
+        </div>
+        {showOverride && (
+          <Field
+            label="Entry Fee % (override)"
+            value={form.entryFeeOverridePct}
+            onChange={set('entryFeeOverridePct')}
+            placeholder="0.02"
+            inputMode="decimal"
+          />
+        )}
+        <div className="flex flex-col gap-1 col-span-2 sm:col-span-1">
           <label className="text-xs text-zinc-500 uppercase tracking-wider opacity-0">Add</label>
           <button onClick={submit} disabled={loading}
             className="py-2 rounded-lg bg-zinc-100 text-zinc-900 text-sm font-semibold hover:bg-white transition-colors disabled:opacity-50">
@@ -100,6 +163,12 @@ function AddForm({ onAdd }: { onAdd: (data: Omit<Position, 'id' | 'openedAt' | '
           </button>
         </div>
       </div>
+      <button
+        onClick={() => setShowOverride((v) => !v)}
+        className="text-xs text-zinc-500 hover:text-zinc-300 self-start transition-colors"
+      >
+        {showOverride ? '− Use default entry fee' : '+ Override entry fee %'}
+      </button>
       {error && <p className="text-xs text-red-400">{error}</p>}
     </div>
   );
@@ -121,9 +190,15 @@ function PnlCell({ pnl, pnlPct }: { pnl: number; pnlPct: number }) {
 }
 
 function CloseRow({ markPrice, onClose, onCancel }: {
-  markPrice: number | undefined; onClose: (price: number) => void; onCancel: () => void;
+  markPrice: number | undefined;
+  onClose: (price: number, type: OrderType) => void;
+  onCancel: () => void;
 }) {
   const [exitPrice, setExitPrice] = useState(markPrice ? String(markPrice) : '');
+  const submit = (type: OrderType) => {
+    const p = parseNumberInput(exitPrice);
+    if (!isNaN(p) && p > 0) onClose(p, type);
+  };
   return (
     <tr className="bg-zinc-800/60">
       <td colSpan={8} className="px-4 py-3">
@@ -131,9 +206,13 @@ function CloseRow({ markPrice, onClose, onCancel }: {
           <span className="text-xs text-zinc-400">Exit price:</span>
           <input type="text" inputMode="decimal" value={exitPrice} onChange={(e) => setExitPrice(e.target.value)}
             className="w-36 bg-zinc-700 border border-zinc-600 rounded-lg px-3 py-1.5 text-sm font-mono text-zinc-100 focus:outline-none focus:border-zinc-400" />
-          <button onClick={() => { const p = parseNumberInput(exitPrice); if (!isNaN(p) && p > 0) onClose(p); }}
+          <button onClick={() => submit('limit')}
+            className="px-4 py-1.5 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-500 transition-colors">
+            Close (Limit)
+          </button>
+          <button onClick={() => submit('market')}
             className="px-4 py-1.5 rounded-lg bg-zinc-100 text-zinc-900 text-sm font-semibold hover:bg-white transition-colors">
-            Confirm Close
+            Close (Market)
           </button>
           <button onClick={onCancel} className="px-3 py-1.5 text-zinc-500 hover:text-zinc-300 text-sm transition-colors">Cancel</button>
         </div>
@@ -180,19 +259,22 @@ export default function PositionTracker() {
   if (!user) return <AuthForm onSuccess={(username) => setUser({ userId: '', username })} />;
 
   const totalRealized = closed.reduce((s, p) => s + (p.realizedPnl ?? 0), 0);
+  const totalFeesPaid = closed.reduce((s, p) => s + (p.totalFees ?? 0), 0);
   const wins = closed.filter((p) => (p.realizedPnl ?? 0) > 0).length;
   const winRate = closed.length > 0 ? (wins / closed.length) * 100 : 0;
 
-  const addPosition = async (data: Omit<Position, 'id' | 'openedAt' | 'userId'>) => {
+  const addPosition = async (data: NewPositionPayload) => {
     await apiFetch('/api/positions', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data),
     });
     await loadPositions();
   };
 
-  const handleClose = async (id: string, closePrice: number) => {
+  const handleClose = async (id: string, closePrice: number, exitOrderType: OrderType) => {
     await apiFetch(`/api/positions/${id}`, {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ closePrice }),
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ closePrice, exitOrderType }),
     });
     setClosingId(null); await loadPositions();
   };
@@ -231,7 +313,7 @@ export default function PositionTracker() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-zinc-800">
-                  {['Symbol', 'Side', 'Entry', 'Mark Price', 'Unreal. P&L', 'Leverage', ''].map((h) => (
+                  {['Symbol', 'Side', 'Entry', 'Mark Price', 'Unreal. P&L', 'Leverage', 'Entry Fee', ''].map((h) => (
                     <th key={h} className="px-4 py-3 text-left text-xs font-medium text-zinc-600 uppercase tracking-wide whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
@@ -242,14 +324,25 @@ export default function PositionTracker() {
                   const { pnl, pnlPct } = mark
                     ? calcPnl(pos.side, pos.entryPrice, mark, pos.size, pos.leverage)
                     : { pnl: 0, pnlPct: 0 };
+                  const entryFee = pos.entryFee ?? 0;
                   return (
                     <Fragment key={pos.id}>
                       <tr key={pos.id} className="border-b border-zinc-800/50 hover:bg-zinc-800/20 transition-colors">
                         <td className="px-4 py-3 font-mono font-semibold text-zinc-100">{pos.symbol}</td>
                         <td className="px-4 py-3">
-                          <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${pos.side === 'long' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-red-500/15 text-red-400'}`}>
-                            {pos.side === 'long' ? 'Long' : 'Short'}
-                          </span>
+                          <div className="flex items-center gap-1.5">
+                            <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${pos.side === 'long' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-red-500/15 text-red-400'}`}>
+                              {pos.side === 'long' ? 'Long' : 'Short'}
+                            </span>
+                            {pos.entryOrderType && (
+                              <span
+                                title={`Entry: ${pos.entryOrderType}`}
+                                className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-zinc-700 text-zinc-300"
+                              >
+                                {pos.entryOrderType === 'limit' ? 'L' : 'M'}
+                              </span>
+                            )}
+                          </div>
                         </td>
                         <td className="px-4 py-3 font-mono text-zinc-300">{fmt(pos.entryPrice, 4)}</td>
                         <td className="px-4 py-3 font-mono text-zinc-100">
@@ -257,6 +350,9 @@ export default function PositionTracker() {
                         </td>
                         <td className="px-4 py-3">{mark ? <PnlCell pnl={pnl} pnlPct={pnlPct} /> : <span className="text-zinc-600">—</span>}</td>
                         <td className="px-4 py-3 font-mono text-zinc-400">{pos.leverage}x</td>
+                        <td className="px-4 py-3 font-mono text-zinc-500 text-xs">
+                          {pos.entryFee != null ? `$${fmt(entryFee, 4)}` : '—'}
+                        </td>
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-2">
                             <button onClick={() => setClosingId(closingId === pos.id ? null : pos.id)}
@@ -269,7 +365,7 @@ export default function PositionTracker() {
                       </tr>
                       {closingId === pos.id && (
                         <CloseRow key={`close-${pos.id}`} markPrice={mark}
-                          onClose={(price) => handleClose(pos.id, price)}
+                          onClose={(price, type) => handleClose(pos.id, price, type)}
                           onCancel={() => setClosingId(null)} />
                       )}
                     </Fragment>
@@ -292,6 +388,8 @@ export default function PositionTracker() {
                   {totalRealized >= 0 ? '+' : ''}${fmt(totalRealized)}
                 </span>
                 <span className="text-zinc-600">·</span>
+                <span className="text-zinc-500 text-xs">net of ${fmt(totalFeesPaid)} fees</span>
+                <span className="text-zinc-600">·</span>
                 <span className="text-zinc-500 text-xs">{fmt(winRate, 0)}% WR · {closed.length} trade{closed.length > 1 ? 's' : ''}</span>
               </div>
               {!confirmClear ? (
@@ -313,7 +411,7 @@ export default function PositionTracker() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-zinc-800">
-                  {['Symbol', 'Side', 'Entry', 'Close', 'Realized P&L', 'Leverage', 'Date', ''].map((h) => (
+                  {['Symbol', 'Side', 'Entry', 'Close', 'Fees', 'Realized P&L', 'Leverage', 'Date', ''].map((h) => (
                     <th key={h} className="px-4 py-3 text-left text-xs font-medium text-zinc-600 uppercase tracking-wide whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
@@ -323,16 +421,36 @@ export default function PositionTracker() {
                   const pnl = pos.realizedPnl ?? 0;
                   const pnlPct = pos.size > 0 ? (pnl / pos.size) * 100 : 0;
                   const date = new Date(pos.closedAt!).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+                  const entryFee = pos.entryFee ?? 0;
+                  const exitFee = pos.exitFee ?? 0;
+                  const totalFees = pos.totalFees ?? (pos.entryFee != null || pos.exitFee != null ? entryFee + exitFee : null);
+                  const feeTitle =
+                    totalFees != null
+                      ? `Entry (${pos.entryOrderType ?? '?'}): $${fmt(entryFee, 4)}\nExit (${pos.exitOrderType ?? '?'}): $${fmt(exitFee, 4)}`
+                      : 'No fee data (legacy trade)';
                   return (
                     <tr key={pos.id} className="border-b border-zinc-800/50 hover:bg-zinc-800/20 transition-colors">
                       <td className="px-4 py-3 font-mono font-semibold text-zinc-100">{pos.symbol}</td>
                       <td className="px-4 py-3">
-                        <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${pos.side === 'long' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-red-500/15 text-red-400'}`}>
-                          {pos.side === 'long' ? 'Long' : 'Short'}
-                        </span>
+                        <div className="flex items-center gap-1.5">
+                          <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${pos.side === 'long' ? 'bg-emerald-500/15 text-emerald-400' : 'bg-red-500/15 text-red-400'}`}>
+                            {pos.side === 'long' ? 'Long' : 'Short'}
+                          </span>
+                          {pos.entryOrderType && pos.exitOrderType && (
+                            <span
+                              title={`Entry: ${pos.entryOrderType} → Exit: ${pos.exitOrderType}`}
+                              className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-zinc-700 text-zinc-300"
+                            >
+                              {pos.entryOrderType === 'limit' ? 'L' : 'M'}/{pos.exitOrderType === 'limit' ? 'L' : 'M'}
+                            </span>
+                          )}
+                        </div>
                       </td>
                       <td className="px-4 py-3 font-mono text-zinc-400">{fmt(pos.entryPrice, 4)}</td>
                       <td className="px-4 py-3 font-mono text-zinc-400">{pos.closePrice ? fmt(pos.closePrice, 4) : '—'}</td>
+                      <td className="px-4 py-3 font-mono text-zinc-500 text-xs" title={feeTitle}>
+                        {totalFees != null ? `$${fmt(totalFees, 4)}` : '—'}
+                      </td>
                       <td className="px-4 py-3"><PnlCell pnl={pnl} pnlPct={pnlPct} /></td>
                       <td className="px-4 py-3 font-mono text-zinc-500">{pos.leverage}x</td>
                       <td className="px-4 py-3 text-zinc-600 text-xs whitespace-nowrap">{date}</td>

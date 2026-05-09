@@ -1,6 +1,15 @@
 import { and, eq } from 'drizzle-orm';
 import { db, schema } from '@/lib/db';
 import { getSession } from '@/lib/auth-server';
+import {
+  DEFAULT_FEE_RATES,
+  computeExitFee,
+  computeRealizedPnl,
+  exitRateFor,
+  isOrderType,
+  isValidRate,
+  type OrderType,
+} from '@/lib/fees';
 
 export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const session = await getSession(req);
@@ -9,10 +18,18 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   const { id } = await params;
 
   try {
-    const body = await req.json() as { closePrice: number };
+    const body = await req.json() as {
+      closePrice: number;
+      exitOrderType?: string;
+      exitFeeRate?: number; // optional override
+    };
     if (!body.closePrice || body.closePrice <= 0) {
       return Response.json({ error: 'Invalid close price' }, { status: 400 });
     }
+
+    const exitOrderType: OrderType = isOrderType(body.exitOrderType)
+      ? body.exitOrderType
+      : 'market';
 
     // Fetch the position first to compute realized P&L
     const [pos] = await db
@@ -24,13 +41,55 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     if (!pos) return Response.json({ error: 'Position not found' }, { status: 404 });
     if (pos.closedAt) return Response.json({ error: 'Position already closed' }, { status: 400 });
 
-    const direction = pos.side === 'long' ? 1 : -1;
-    const realizedPnl =
-      direction * ((body.closePrice - pos.entryPrice) / pos.entryPrice) * pos.size * pos.leverage;
+    let exitFeeRate: number;
+    if (body.exitFeeRate !== undefined) {
+      if (!isValidRate(body.exitFeeRate)) {
+        return Response.json({ error: 'Invalid exitFeeRate (must be 0–0.01)' }, { status: 400 });
+      }
+      exitFeeRate = body.exitFeeRate;
+    } else {
+      const [settings] = await db
+        .select()
+        .from(schema.userSettings)
+        .where(eq(schema.userSettings.userId, session.userId))
+        .limit(1);
+      const rates = settings ?? DEFAULT_FEE_RATES;
+      exitFeeRate = exitRateFor(rates, exitOrderType);
+    }
+
+    const entryFee = pos.entryFee ?? 0;
+    const exitFee = computeExitFee(
+      pos.size,
+      pos.leverage,
+      pos.entryPrice,
+      body.closePrice,
+      exitFeeRate
+    );
+    const totalFees = entryFee + exitFee;
+    if (pos.side !== 'long' && pos.side !== 'short') {
+      return Response.json({ error: 'Position has invalid side value' }, { status: 500 });
+    }
+    const realizedPnl = computeRealizedPnl({
+      side: pos.side,
+      entryPrice: pos.entryPrice,
+      closePrice: body.closePrice,
+      size: pos.size,
+      leverage: pos.leverage,
+      entryFee,
+      exitFee,
+    });
 
     const [updated] = await db
       .update(schema.positions)
-      .set({ closedAt: new Date(), closePrice: body.closePrice, realizedPnl })
+      .set({
+        closedAt: new Date(),
+        closePrice: body.closePrice,
+        exitOrderType,
+        exitFeeRate,
+        exitFee,
+        totalFees,
+        realizedPnl,
+      })
       .where(and(eq(schema.positions.id, id), eq(schema.positions.userId, session.userId)))
       .returning();
 

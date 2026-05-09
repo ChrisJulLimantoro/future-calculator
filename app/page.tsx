@@ -3,8 +3,9 @@
 import { useState } from 'react';
 import RiskCalculator from '@/components/RiskCalculator';
 import PositionTracker from '@/components/PositionTracker';
+import FeeSettings from '@/components/FeeSettings';
 
-type Tab = 'calculator' | 'positions';
+type Tab = 'calculator' | 'positions' | 'settings';
 
 export default function Home() {
   const [tab, setTab] = useState<Tab>('calculator');
@@ -20,7 +21,7 @@ export default function Home() {
 
         {/* Tab bar */}
         <div className="flex gap-1 mb-6 p-1 bg-zinc-900 border border-zinc-800 rounded-xl w-fit">
-          {([['calculator', 'Calculator'], ['positions', 'Positions']] as [Tab, string][]).map(([id, label]) => (
+          {([['calculator', 'Calculator'], ['positions', 'Positions'], ['settings', 'Settings']] as [Tab, string][]).map(([id, label]) => (
             <button
               key={id}
               onClick={() => setTab(id)}
@@ -35,7 +36,9 @@ export default function Home() {
           ))}
         </div>
 
-        {tab === 'calculator' ? <RiskCalculator /> : <PositionTracker />}
+        {tab === 'calculator' && <RiskCalculator />}
+        {tab === 'positions' && <PositionTracker />}
+        {tab === 'settings' && <FeeSettings />}
       </div>
     </main>
   );

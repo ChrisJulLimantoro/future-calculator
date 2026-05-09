@@ -7,9 +7,16 @@ export interface Position {
   entryPrice: number;
   size: number;      // margin in USDT (capital allocated, before leverage)
   leverage: number;
+  entryOrderType?: 'limit' | 'market' | null;
+  entryFeeRate?: number | null;
+  entryFee?: number | null;
   openedAt: string | Date;
   closedAt?: string | Date | null;
   closePrice?: number | null;
+  exitOrderType?: 'limit' | 'market' | null;
+  exitFeeRate?: number | null;
+  exitFee?: number | null;
+  totalFees?: number | null;
   realizedPnl?: number | null;
 }
 
